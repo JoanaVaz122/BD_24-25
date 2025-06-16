@@ -7,18 +7,18 @@ random.seed(42)
 start_date = datetime(2025, 1, 1)
 end_date = datetime(2025, 7, 31)
 
-n_voos_por_dia = random.randint(5, 10)
+n_voos_por_dia = random.randint(5, 15)
 n_avioes = random.randint(10, 20)
-n_modelos_distintos = 5
+n_modelos_distintos =  random.randint(5, 11)
 n_aeroportos = 12
-n_bilhetes = random.randint(30000, 35000)
+n_bilhetes = random.randint(30000, 40000)
 
 output = open("populate.sql", "w")
 def print_sql(line=""):
     output.write(line + "\n")
 
 # --- Dados base ---
-modelos_aviao = ["Airbus A320", "Boeing 737", "Airbus A330", "Boeing 787", "Embraer 190"]
+modelos_aviao = ["Airbus A320", "Boeing 737", "Airbus A330", "Boeing 787", "Embraer 190", "Boeing 777", "Airbus A350", "Boeing 747", "Airbus A380", "Bombardier CRJ900", "ATR 72"]
 aeroportos = [
     ("LIS", "Humberto Delgado", "Lisboa", "Portugal"),
     ("OPO", "Francisco Sá Carneiro", "Porto", "Portugal"),
@@ -89,7 +89,6 @@ for no_serie, _ in avioes:
             print_sql(f"INSERT INTO assento (lugar, no_serie, prim_classe) VALUES ('{lugar}', '{no_serie}', {str(prim).upper()});")
 print_sql()
 
-
 # --- 4. Voos ---
 print_sql("-- === 4. Voos ===")
 voos = []
@@ -99,25 +98,31 @@ used_voos = set()  # To ensure (no_serie, hora_partida) is unique
 used_chegada = set()  # To ensure (hora_chegada, partida, chegada) is unique
 used_partida_combo = set()  # To ensure (hora_partida, partida, chegada) is unique
 
+# Map airport code to city for quick lookup
+aeroporto_cidade = {a[0]: a[2] for a in aeroportos}
+
 # Para cada avião, manter o aeroporto atual
 aviao_estado = {}
 for no_serie, _ in avioes:
     aviao_estado[no_serie] = random.choice(aeroportos)[0]
-
-# Garantir que se existir um voo LIS-PARIS num dia, existe também um voo PARIS-LISBOA nesse dia,
-# mas não precisa ser o mesmo avião nem à mesma hora.
 
 voos_ida = set()  # (origem, destino, data)
 voos_volta_necessarios = set()  # (destino, origem, data)
 
 while current_time <= end_date:
     voos_dia = []
-    for _ in range(n_voos_por_dia):
+    voos_gerados_hoje = 0
+    # Garante pelo menos 5 voos por dia
+    n_voos_hoje = max(n_voos_por_dia, 5)
+    for _ in range(n_voos_hoje):
         # Escolher avião e respetivo aeroporto atual
         no_serie = random.choice(list(aviao_estado.keys()))
         origem = aviao_estado[no_serie]
-        # Escolher destino diferente da origem
-        destinos_possiveis = [a[0] for a in aeroportos if a[0] != origem]
+        origem_cidade = aeroporto_cidade[origem]
+        # Escolher destino diferente da origem e de cidade diferente
+        destinos_possiveis = [a[0] for a in aeroportos if a[0] != origem and aeroporto_cidade[a[0]] != origem_cidade]
+        if not destinos_possiveis:
+            continue
         destino = random.choice(destinos_possiveis)
 
         hora_partida = datetime.combine(current_time.date(), datetime.min.time()) + timedelta(hours=random.randint(5, 20))
@@ -125,6 +130,7 @@ while current_time <= end_date:
         hora_chegada = hora_partida + duracao
 
         # Garantir unicidade
+        tentativas = 0
         while (
             (no_serie, hora_partida) in used_voos or
             (no_serie, hora_chegada) in used_voos or
@@ -134,17 +140,24 @@ while current_time <= end_date:
             hora_partida = datetime.combine(current_time.date(), datetime.min.time()) + timedelta(hours=random.randint(5, 20))
             duracao = timedelta(hours=random.randint(1, 4))
             hora_chegada = hora_partida + duracao
+            tentativas += 1
+            if tentativas > 20:
+                break  # Evita loop infinito
+
+        if tentativas > 20:
+            continue
 
         used_voos.add((no_serie, hora_partida))
         used_voos.add((no_serie, hora_chegada))
         used_chegada.add((hora_chegada, origem, destino))
         used_partida_combo.add((hora_partida, origem, destino))
 
-        print_sql(f"INSERT INTO voo (id, no_serie, hora_partida, hora_chegada, partida, chegada) "
-                  f"VALUES ({voo_id}, '{no_serie}', '{hora_partida}', '{hora_chegada}', '{origem}', '{destino}');")
+        print_sql(f"INSERT INTO voo ( no_serie, hora_partida, hora_chegada, partida, chegada) "
+                  f"VALUES ( '{no_serie}', '{hora_partida}', '{hora_chegada}', '{origem}', '{destino}');")
         voos.append((voo_id, no_serie))
         voos_dia.append((origem, destino))
         voo_id += 1
+        voos_gerados_hoje += 1
 
         # Atualizar aeroporto atual do avião
         aviao_estado[no_serie] = destino
@@ -159,7 +172,8 @@ print_sql()
 # Gerar voos inversos que não existam ainda (pode ser qualquer avião, qualquer hora)
 print_sql("-- === 4b. Voos Inversos ===")
 for origem, destino, data in voos_volta_necessarios:
-    if (origem, destino, data) not in voos_ida:
+    # Só gera se cidades forem diferentes
+    if (origem, destino, data) not in voos_ida and aeroporto_cidade[origem] != aeroporto_cidade[destino]:
         # Escolher avião aleatório
         no_serie = random.choice([a[0] for a in avioes])
         hora_partida = datetime.combine(data, datetime.min.time()) + timedelta(hours=random.randint(5, 22))
@@ -167,6 +181,7 @@ for origem, destino, data in voos_volta_necessarios:
         hora_chegada = hora_partida + duracao
 
         # Garantir unicidade
+        tentativas = 0
         while (
             (no_serie, hora_partida) in used_voos or
             (no_serie, hora_chegada) in used_voos or
@@ -176,23 +191,29 @@ for origem, destino, data in voos_volta_necessarios:
             hora_partida = datetime.combine(data, datetime.min.time()) + timedelta(hours=random.randint(5, 22))
             duracao = timedelta(hours=random.randint(1, 4))
             hora_chegada = hora_partida + duracao
+            tentativas += 1
+            if tentativas > 20:
+                break
+
+        if tentativas > 20:
+            continue
 
         used_voos.add((no_serie, hora_partida))
         used_voos.add((no_serie, hora_chegada))
         used_chegada.add((hora_chegada, origem, destino))
         used_partida_combo.add((hora_partida, origem, destino))
 
-        print_sql(f"INSERT INTO voo (id, no_serie, hora_partida, hora_chegada, partida, chegada) "
-                  f"VALUES ({voo_id}, '{no_serie}', '{hora_partida}', '{hora_chegada}', '{origem}', '{destino}');")
+        print_sql(f"INSERT INTO voo ( no_serie, hora_partida, hora_chegada, partida, chegada) "
+                  f"VALUES ( '{no_serie}', '{hora_partida}', '{hora_chegada}', '{origem}', '{destino}');")
         voos.append((voo_id, no_serie))
         voo_id += 1
 print_sql()
 
-
-
 # --- 5. Vendas ---
 print_sql("-- === 5. Vendas ===")
-n_vendas = int(n_bilhetes / 1.5)
+# Garantir pelo menos 10.000 vendas
+n_vendas = max(int(n_bilhetes / 1.5), 10000)
+vendas = []
 for venda_id in range(1, n_vendas + 1):
     nif = ''.join(random.choices(string.digits, k=9))
     balcao = random.choice(aeroportos)[0]
@@ -200,55 +221,97 @@ for venda_id in range(1, n_vendas + 1):
     hora = timedelta(hours=random.randint(0, 23), minutes=random.randint(0, 59), seconds=random.randint(0, 59))
     data_hora = dia + hora
     data_hora_str = data_hora.strftime('%Y-%m-%d %H:%M:%S')
-    print_sql(f"INSERT INTO venda (codigo_reserva, nif_cliente, balcao, hora) VALUES ({venda_id}, '{nif}', '{balcao}', '{data_hora_str}');")
+    vendas.append((venda_id, data_hora))
+    print_sql(f"INSERT INTO venda ( nif_cliente, balcao, hora) VALUES ( '{nif}', '{balcao}', '{data_hora_str}');")
 print_sql()
 
 # --- 6. Bilhetes ---
 print_sql("-- === 6. Bilhetes ===")
-# Para garantir unicidade: (voo_id, codigo_reserva, nome_passegeiro)
 bilhete_unicos = set()
-# Para garantir que o assento está disponível em cada voo
 assentos_por_voo = {}
+bilhetes_por_voo = {}
 
 for voo_id, no_serie in voos:
-    # Gerar todos os assentos possíveis para este avião
     assentos = [f"{f}{c}" for f in range(1, 31) for c in "ABCDEF"]
     random.shuffle(assentos)
     assentos_por_voo[(voo_id, no_serie)] = assentos
+    bilhetes_por_voo[voo_id] = {"prim": 0, "econ": 0}
 
-for i in range(1, n_bilhetes + 1):
-    # Escolher voo e avião
+# Garantir que todos os voos têm pelo menos um bilhete de cada classe
+bilhete_id = 1
+for voo_id, no_serie in voos:
+    for prim in [True, False]:
+        nome = random.choice(nomes)
+        venda_id = random.randint(1, n_vendas)
+        preco = round(random.uniform(50, 500), 2)
+        tentativas = 0
+        while (voo_id, venda_id, nome) in bilhete_unicos and tentativas < 10:
+            venda_id = random.randint(1, n_vendas)
+            nome = random.choice(nomes)
+            tentativas += 1
+        if (voo_id, venda_id, nome) in bilhete_unicos:
+            continue
+        bilhete_unicos.add((voo_id, venda_id, nome))
+        assentos = assentos_por_voo[(voo_id, no_serie)]
+        checkin = vendas[venda_id-1][1] < datetime.now()
+        if checkin:
+            if prim:
+                assentos_prim = [a for a in assentos if int(a[:-1]) <= 3]
+                if not assentos_prim:
+                    continue
+                assento = assentos_prim.pop()
+                assentos.remove(assento)
+                bilhetes_por_voo[voo_id]["prim"] += 1
+            else:
+                assentos_econ = [a for a in assentos if int(a[:-1]) > 3]
+                if not assentos_econ:
+                    continue
+                assento = assentos_econ.pop()
+                assentos.remove(assento)
+                bilhetes_por_voo[voo_id]["econ"] += 1
+            assento_str = f"'{assento}'"
+        else:
+            assento_str = "NULL"
+        print_sql(f"INSERT INTO bilhete ( voo_id, codigo_reserva, nome_passegeiro, preco, prim_classe, lugar, no_serie) "
+                  f"VALUES ( {voo_id}, {venda_id}, '{nome}', {preco}, {str(prim).upper()}, {assento_str}, '{no_serie}');")
+        bilhete_id += 1
+
+# Gerar os restantes bilhetes
+while bilhete_id <= n_bilhetes:
     voo_id, no_serie = random.choice(voos)
     venda_id = random.randint(1, n_vendas)
     nome = random.choice(nomes)
     preco = round(random.uniform(50, 500), 2)
     prim = random.random() < 0.2
-
-    # Garantir unicidade (voo_id, codigo_reserva, nome_passegeiro)
     tentativas = 0
     while (voo_id, venda_id, nome) in bilhete_unicos and tentativas < 10:
         venda_id = random.randint(1, n_vendas)
         nome = random.choice(nomes)
         tentativas += 1
     if (voo_id, venda_id, nome) in bilhete_unicos:
-        continue  # Não conseguiu unicidade, ignora este bilhete
-
+        continue
     bilhete_unicos.add((voo_id, venda_id, nome))
-
-    # Escolher assento disponível
     assentos = assentos_por_voo[(voo_id, no_serie)]
-    if prim:
-        assentos_prim = [a for a in assentos if int(a[:-1]) <= 3]
-        if not assentos_prim:
-            continue  # Sem assentos de primeira classe disponíveis
-        assento = assentos_prim.pop()
-        assentos.remove(assento)
+    checkin = vendas[venda_id-1][1] < datetime.now()
+    if checkin:
+        if prim:
+            assentos_prim = [a for a in assentos if int(a[:-1]) <= 3]
+            if not assentos_prim:
+                continue
+            assento = assentos_prim.pop()
+            assentos.remove(assento)
+            bilhetes_por_voo[voo_id]["prim"] += 1
+        else:
+            assentos_econ = [a for a in assentos if int(a[:-1]) > 3]
+            if not assentos_econ:
+                continue
+            assento = assentos_econ.pop()
+            assentos.remove(assento)
+            bilhetes_por_voo[voo_id]["econ"] += 1
+        assento_str = f"'{assento}'"
     else:
-        assentos_econ = [a for a in assentos if int(a[:-1]) > 3]
-        if not assentos_econ:
-            continue  # Sem assentos económicos disponíveis
-        assento = assentos_econ.pop()
-        assentos.remove(assento)
-
-    print_sql(f"INSERT INTO bilhete (id, voo_id, codigo_reserva, nome_passegeiro, preco, prim_classe, lugar, no_serie) "
-              f"VALUES ({i}, {voo_id}, {venda_id}, '{nome}', {preco}, {str(prim).upper()}, '{assento}', '{no_serie}');")
+        assento_str = "NULL"
+    print_sql(f"INSERT INTO bilhete (voo_id, codigo_reserva, nome_passegeiro, preco, prim_classe, lugar, no_serie) "
+              f"VALUES ({voo_id}, {venda_id}, '{nome}', {preco}, {str(prim).upper()}, {assento_str}, '{no_serie}');")
+    bilhete_id += 1
+print_sql()
